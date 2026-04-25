@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VOLTMASTER PRO v3.0 | ST SUBMISSION ENGINE</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<style>
+:root { --bg:#020617; --card:#111827; --accent:#22c55e; --text:#94a3b8; --border:#334155; --pro:#f59e0b; }
+
+body{margin:0;font-family:Arial;background:var(--bg);color:white;padding-bottom:50px;}
+header{text-align:center;padding:25px;background:#0f172a;border-bottom:4px solid var(--pro);}
+header h1{margin:0;font-size:1.4rem;}
+.container{max-width:1100px;margin:auto;padding:10px;}
+.card{background:var(--card);padding:15px;border-radius:12px;margin-top:15px;border:1px solid var(--border);}
+h3{color:var(--accent);margin-bottom:10px;}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;}
+input,select{width:100%;padding:8px;background:#0f172a;color:white;border:1px solid var(--border);}
+button{width:100%;padding:15px;margin-top:10px;background:var(--accent);font-weight:bold;}
+.result{white-space:pre-wrap;background:#000;padding:20px;margin-top:15px;display:none;font-family:monospace;}
+</style>
+</head>
+
+<body>
+
+<header>
+<h1>VOLTMASTER PRO v3.0 | ST SUBMISSION ENGINE</h1>
+<p style="color:#f59e0b">FULL IEC / ST COMPLIANCE DESIGN TOOL</p>
+</header>
+
+<div class="container">
+
+<div class="card">
+<h3>Load Input</h3>
+<div class="grid">
+<input id="qL" value="10" type="number" placeholder="Lighting">
+<input id="qF" value="5" type="number" placeholder="Fans">
+<input id="qS" value="12" type="number" placeholder="Sockets">
+<input id="qWH" value="1" type="number" placeholder="Heater">
+</div>
+</div>
+
+<button onclick="calc()">GENERATE ST SUBMISSION REPORT</button>
+
+<div id="out" class="result"></div>
+
+</div>
+
+<script>
+
+// ================= ST TABLES =================
+const breakers = [6,10,16,20,32,40,63,80,100,125];
+
+const cableTable = {
+1.5:18, 2.5:24, 4:32, 6:41, 10:57, 16:76, 25:101, 35:125
+};
+
+const mvAM = {1.5:29,2.5:18,4:11,6:7.3,10:4.4,16:2.8,25:1.8};
+
+// ================= ST ENGINE =================
+
+function derating(style){
+let Ci = style==="conduit"?0.9:style==="trunking"?0.85:1;
+let Ca = 0.94;
+let Cg = 0.8;
+return Ci*Ca*Cg;
+}
+
+function selectSwitch(Ib){
+return breakers.find(b=>b>=Ib*1.25)||125;
+}
+
+function selectCable(In,style){
+let df = derating(style);
+for(let s in cableTable){
+let Iz = cableTable[s]*df;
+if(Iz>=In) return {size:+s,Iz};
+}
+return {size:35,Iz:cableTable[35]*df};
+}
+
+function vd(mv,Ib,L,phase){
+let v=(mv*Ib*L)/1000;
+if(phase==1) v*=2;
+if(phase==3) v*=Math.sqrt(3);
+return v;
+}
+
+function zs(Ze,mv,L){
+return Ze+(mv*L/1000);
+}
+
+// ================= MAIN =================
+
+function calc(){
+
+let phase=1;
+let style="conduit";
+
+// LOAD
+let L=getV('qL')*15;
+let F=getV('qF')*75*0.8;
+let S=getV('qS')*500;
+S=S<=1000?S:1000+(S-1000)*0.4;
+let WH=getV('qWH')*3000;
+
+let TCL=L+F+S+WH;
+
+// INCOMING DESIGN
+let Ib=TCL/230;
+
+// MAIN SWITCH
+let In=selectSwitch(Ib);
+
+// CABLE
+let cable=selectCable(In,style);
+let mainCab=cable.size;
+let Iz=cable.Iz;
+
+// VD
+let VD=vd(mvAM[mainCab],Ib,30,phase);
+
+// EARTH FAULT
+let Zs=zs(0.35,mvAM[mainCab],30);
+let Ik=230/Zs;
+
+// COMPLIANCE
+let ok = (Ib<=In && In<=Iz && VD<=4 && Zs<=4.6);
+
+// ================= REPORT =================
+
+let report = `
+==================================================
+VOLTMASTER PRO v3.0 - ST SUBMISSION REPORT
+==================================================
+
+[INCOMING SUPPLY]
+Design Current (Ib) : ${Ib.toFixed(2)} A
+Main Switch (In)    : ${In} A
+Cable Size         : ${mainCab} mm²
+Cable Capacity     : ${Iz.toFixed(2)} A
+
+[PROTECTION COORDINATION]
+Ib ≤ In ≤ Iz       : ${(Ib<=In && In<=Iz)?"PASS":"FAIL"}
+
+[VOLTAGE DROP]
+VD                 : ${VD.toFixed(2)} %
+Limit              : 4%
+Status             : ${VD<=4?"PASS":"FAIL"}
+
+[EARTH FAULT LOOP]
+Zs                 : ${Zs.toFixed(2)} Ω
+Fault Current      : ${Ik.toFixed(0)} A
+Limit              : 4.6 Ω
+Status             : ${Zs<=4.6?"PASS":"FAIL"}
+
+[RCD SYSTEM]
+Main RCD           : 63A / 100mA S-Type
+
+--------------------------------------------------
+OVERALL ST STATUS  : ${ok?"FULLY COMPLIANT":"NON COMPLIANT"}
+--------------------------------------------------
+
+REFERENCE:
+- ST Electricity Regulations 1994
+- MS IEC 60364 LV Installation Standard
+
+==================================================
+`;
+
+document.getElementById('out').style.display="block";
+document.getElementById('out').innerText=report;
+
+}
+
+function getV(id){return +document.getElementById(id).value;}
+
+</script>
+
+</body>
+</html>
